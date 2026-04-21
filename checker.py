@@ -183,6 +183,36 @@ class YouTubeChecker:
         
         return videos
     
+    def get_live_streams(self, channel_id: str) -> List[Dict]:
+        """Get currently live streams from a channel."""
+        data = self._api_call(
+            "search",
+            {
+                "part": "snippet",
+                "channelId": channel_id,
+                "type": "video",
+                "eventType": "live"
+            }
+        )
+        
+        if not data or 'items' not in data:
+            return []
+        
+        videos = []
+        for item in data['items']:
+            snippet = item['snippet']
+            video_id = snippet['resourceId']['videoId']
+            videos.append({
+                'video_id': video_id,
+                'title': snippet['title'],
+                'description': snippet['description'][:200],
+                'published_at': snippet['publishedAt'],
+                'thumbnail': snippet.get('thumbnails', {}).get('medium', {}).get('url'),
+                'is_live': True
+            })
+        
+        return videos
+
     def get_video_status(self, video_id: str) -> Optional[Dict]:
         """Get video status (live or not)."""
         data = self._api_call(
@@ -211,17 +241,35 @@ class YouTubeChecker:
         return result
     
     def check_channel(self, channel_id: str, db) -> List[Dict]:
-        """Check channel for new videos."""
+        """Check channel for new videos and live streams."""
         uploads_playlist = self.get_upload_playlist(channel_id)
         if not uploads_playlist:
             logger.warning(f"Could not get uploads playlist for {channel_id}")
             return []
         
-        # Get recent videos (last 2 to catch any missed)
+        new_videos = []
+        
+        # Check for live streams first
+        live_streams = self.get_live_streams(channel_id)
+        for video in live_streams:
+            if not db.video_exists(video['video_id']):
+                db.add_video(
+                    video_id=video['video_id'],
+                    channel_id=channel_id,
+                    title=video['title'],
+                    published_at=video['published_at'],
+                    is_live=1
+                )
+                new_videos.append(video)
+                logger.info(f"LIVE stream found: {video['title']}")
+        
+        # Get recent videos (last 3 to catch any missed)
         videos = self.get_recent_videos(uploads_playlist, limit=3)
         
-        new_videos = []
         for video in videos:
+            # Skip if already marked as live (already processed above)
+            if video.get('is_live'):
+                continue
             # Check if already in database
             if not db.video_exists(video['video_id']):
                 # Add to database
@@ -230,7 +278,7 @@ class YouTubeChecker:
                     channel_id=channel_id,
                     title=video['title'],
                     published_at=video['published_at'],
-                    is_live=video['is_live']
+                    is_live=0
                 )
                 new_videos.append(video)
                 logger.info(f"New video found: {video['title']}")
