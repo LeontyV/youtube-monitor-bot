@@ -201,7 +201,7 @@ class YouTubeChecker:
         videos = []
         for item in data['items']:
             snippet = item['snippet']
-            video_id = snippet['resourceId']['videoId']
+            video_id = item['id']['videoId']
             videos.append({
                 'video_id': video_id,
                 'title': snippet['title'],
