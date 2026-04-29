@@ -320,50 +320,25 @@ async def recent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("🎬 Загружаю последние видео...")
     
-    videos = db.get_recent_videos(limit=30)
+    videos = db.get_recent_videos(limit=10)
     
     if not videos:
         await update.message.reply_text("📭 Нет видео в базе.")
         return
     
-    # Fetch Russian titles for displayed videos
-    videos_with_titles = []
-    for v in videos:
-        try:
-            ydl_opts = {
-                'quiet': True,
-                'skip_download': True,
-                'nocheckcertificate': True,
-                'socket_timeout': 10,
-                'extractor_args': {'youtube': {'lang': ['ru']}}
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(f"https://www.youtube.com/watch?v={v['video_id']}", download=False)
-                if info:
-                    v['title'] = info.get('title', v.get('title', 'Unknown'))
-        except:
-            pass
-        videos_with_titles.append(v)
-    
-    channels = {}
-    for v in videos_with_titles:
-        ch_name = v.get('channel_name', 'Unknown')
-        if ch_name not in channels:
-            channels[ch_name] = []
-        channels[ch_name].append(v)
-    
-    await update.message.reply_text("🎬 Последние видео:", parse_mode=None)
+    await update.message.reply_text(f"🎬 Последние 10 видео:", parse_mode=None)
     await asyncio.sleep(0.2)
     
-    for ch_name, ch_videos in list(channels.items())[:5]:
-        text = f"📺 <b>{ch_name}</b> ({len(ch_videos)})\n\n"
-        for v in ch_videos[:5]:
-            video_url = f"https://www.youtube.com/watch?v={v['video_id']}"
-            title = v['title'][:60] + ('...' if len(v['title']) > 60 else '')
-            text += f'• <a href="{video_url}">{title}</a>\n'
+    for v in videos:
+        video_url = f"https://www.youtube.com/watch?v={v['video_id']}"
+        ch_name = v.get('channel_name', '?')
+        title = v.get('title', 'Unknown')[:60]
+        if len(v.get('title', '')) > 60:
+            title += '...'
         
+        text = f"📺 <b>{ch_name}</b>\n• <a href="{video_url}">{title}</a>"
         await update.message.reply_text(text, parse_mode='HTML', disable_web_page_preview=True)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.2)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
