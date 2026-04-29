@@ -320,7 +320,7 @@ async def recent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("🎬 Загружаю последние видео...")
     
-    videos = db.get_recent_videos(limit=10)
+    videos = db.get_recent_videos(limit=30)
     
     if not videos:
         await update.message.reply_text("📭 Нет видео в базе.")
@@ -355,8 +355,8 @@ async def recent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎬 Последние видео:", parse_mode=None)
     await asyncio.sleep(0.2)
     
-    for ch_name, ch_videos in list(channels.items())[:3]:
-        text = f"📺 {ch_name}\n"
+    for ch_name, ch_videos in list(channels.items())[:5]:
+        text = f"📺 <b>{ch_name}</b> ({len(ch_videos)})\n\n"
         for v in ch_videos[:5]:
             video_url = f"https://www.youtube.com/watch?v={v['video_id']}"
             title = v['title'][:60] + ('...' if len(v['title']) > 60 else '')
