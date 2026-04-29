@@ -236,9 +236,26 @@ async def check_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error checking {ch['name']}: {e}")
     
     if all_new_videos:
-        notifier = TelegramNotifier(TOKEN, str(ALLOWED_USER_ID))
-        notifier.notify_batch(all_new_videos, db)
+        # Group by channel
+        by_channel = {}
+        for v in all_new_videos:
+            ch_name = v['channel_name']
+            if ch_name not in by_channel:
+                by_channel[ch_name] = []
+            by_channel[ch_name].append(v)
+        
         await update.message.reply_text(f"✅ Найдено {len(all_new_videos)} новых видео!")
+        await asyncio.sleep(0.3)
+        
+        for ch_name, videos in by_channel.items():
+            text = f"📺 <b>{ch_name}</b> ({len(videos)} новых)\n\n"
+            for v in videos[:10]:
+                video_url = f"https://www.youtube.com/watch?v={v['video_id']}"
+                title = v['title'][:60] + ('...' if len(v['title']) > 60 else '')
+                text += f'• <a href="{video_url}">{title}</a>\n'
+            
+            await update.message.reply_text(text, parse_mode='HTML', disable_web_page_preview=True)
+            await asyncio.sleep(0.3)
     else:
         await update.message.reply_text("ℹ️ Новых видео нет.")
 
