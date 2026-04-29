@@ -35,12 +35,6 @@ def check_channel_via_ytdlp(channel_id: str, db) -> list:
             'nocheckcertificate': True,
             'socket_timeout': 30,
             'playlistend': 10,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['default'],
-                    'player_parameters': {'hl': 'ru', 'gl': 'RU'}
-                }
-            },
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -51,6 +45,8 @@ def check_channel_via_ytdlp(channel_id: str, db) -> list:
             
             entries = list(info.get('entries', [])) or []
             
+            # Collect new video IDs first
+            new_ids = []
             for entry in entries[:10]:
                 if not entry:
                     continue
@@ -64,31 +60,46 @@ def check_channel_via_ytdlp(channel_id: str, db) -> list:
                 if duration and duration <= 60:
                     continue
                 
-                title = entry.get('title', 'Unknown')
-                # Get upload date
-                upload_date = entry.get('upload_date', '')
-                if upload_date and len(upload_date) == 8:
-                    published = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}T00:00:00Z"
-                else:
-                    published = datetime.now().isoformat() + 'Z'
-                
-                is_live = 1 if entry.get('was_live', False) else 0
-                
-                db.add_video(
-                    video_id=video_id,
-                    channel_id=channel_id,
-                    title=title,
-                    published_at=published,
-                    is_live=is_live
-                )
-                
-                new_videos.append({
-                    'video_id': video_id,
-                    'title': title,
-                    'published_at': published,
-                    'is_live': is_live,
-                    'channel_id': channel_id
-                })
+                new_ids.append(video_id)
+        
+        # Fetch Russian titles for new videos
+        for video_id in new_ids:
+            try:
+                ydl_opts_ru = {
+                    'quiet': True,
+                    'skip_download': True,
+                    'nocheckcertificate': True,
+                    'socket_timeout': 15,
+                    'extractor_args': {'youtube': {'lang': ['ru']}}
+                }
+                with yt_dlp.YoutubeDL(ydl_opts_ru) as ydl:
+                    info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+                    if info:
+                        title = info.get('title', 'Unknown')
+                        upload_date = info.get('upload_date', '')
+                        if upload_date and len(upload_date) == 8:
+                            published = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}T00:00:00Z"
+                        else:
+                            published = datetime.now().isoformat() + 'Z'
+                        is_live = 1 if info.get('live_status') == 'is_live' else 0
+                        
+                        db.add_video(
+                            video_id=video_id,
+                            channel_id=channel_id,
+                            title=title,
+                            published_at=published,
+                            is_live=is_live
+                        )
+                        
+                        new_videos.append({
+                            'video_id': video_id,
+                            'title': title,
+                            'published_at': published,
+                            'is_live': is_live,
+                            'channel_id': channel_id
+                        })
+            except Exception as e:
+                logger.error(f"Error fetching title for {video_id}: {e}")
                 
     except Exception as e:
         logger.error(f"Error checking channel {channel_id}: {e}")

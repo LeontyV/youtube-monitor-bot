@@ -318,14 +318,35 @@ async def recent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ Доступ запрещён.")
         return
     
+    await update.message.reply_text("🎬 Загружаю последние видео...")
+    
     videos = db.get_recent_videos(limit=10)
     
     if not videos:
         await update.message.reply_text("📭 Нет видео в базе.")
         return
     
-    channels = {}
+    # Fetch Russian titles for displayed videos
+    videos_with_titles = []
     for v in videos:
+        try:
+            ydl_opts = {
+                'quiet': True,
+                'skip_download': True,
+                'nocheckcertificate': True,
+                'socket_timeout': 10,
+                'extractor_args': {'youtube': {'lang': ['ru']}}
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(f"https://www.youtube.com/watch?v={v['video_id']}", download=False)
+                if info:
+                    v['title'] = info.get('title', v.get('title', 'Unknown'))
+        except:
+            pass
+        videos_with_titles.append(v)
+    
+    channels = {}
+    for v in videos_with_titles:
         ch_name = v.get('channel_name', 'Unknown')
         if ch_name not in channels:
             channels[ch_name] = []
@@ -338,7 +359,7 @@ async def recent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = f"📺 {ch_name}\n"
         for v in ch_videos[:5]:
             video_url = f"https://www.youtube.com/watch?v={v['video_id']}"
-            title = v['title'][:50] + ('...' if len(v['title']) > 50 else '')
+            title = v['title'][:60] + ('...' if len(v['title']) > 60 else '')
             text += f'• <a href="{video_url}">{title}</a>\n'
         
         await update.message.reply_text(text, parse_mode='HTML', disable_web_page_preview=True)
