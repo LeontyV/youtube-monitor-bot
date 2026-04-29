@@ -336,7 +336,7 @@ async def recent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(v.get('title', '')) > 60:
             title += '...'
         
-        text = f"📺 <b>{ch_name}</b>\n• <a href="{video_url}">{title}</a>"
+        text = f'📺 <b>{ch_name}</b>\n• <a href="{video_url}">{title}</a>'
         await update.message.reply_text(text, parse_mode='HTML', disable_web_page_preview=True)
         await asyncio.sleep(0.2)
 
