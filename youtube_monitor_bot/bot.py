@@ -188,7 +188,7 @@ async def check_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'extract_flat': True,
                 'nocheckcertificate': True,
                 'socket_timeout': 30,
-                'playlistend': 10,
+                'playlistend': 50,
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:

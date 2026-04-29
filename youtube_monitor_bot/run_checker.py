@@ -34,6 +34,7 @@ def check_channel_via_ytdlp(channel_id: str, db) -> list:
             'extract_flat': True,
             'nocheckcertificate': True,
             'socket_timeout': 30,
+            'playlistend': 50,
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
