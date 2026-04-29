@@ -188,7 +188,13 @@ async def check_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'extract_flat': True,
                 'nocheckcertificate': True,
                 'socket_timeout': 30,
-                'playlistend': 50,
+                'playlistend': 10,
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['default'],
+                        'player_parameters': {'hl': 'ru', 'gl': 'RU'}
+                    }
+                },
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -205,6 +211,11 @@ async def check_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     video_id = entry.get('id', '')
                     if not video_id or db.video_exists(video_id):
+                        continue
+                    
+                    # Skip shorts (duration <= 60 seconds)
+                    duration = entry.get('duration', 0)
+                    if duration and duration <= 60:
                         continue
                     
                     title = entry.get('title', 'Unknown')
