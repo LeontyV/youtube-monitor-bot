@@ -173,25 +173,72 @@ async def check_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ Доступ запрещён.")
         return
     
-    await update.message.reply_text("🔍 Проверяю каналы...")
+    await update.message.reply_text("🔍 Проверяю каналы через yt-dlp...")
     
-    checker = YouTubeChecker(YOUTUBE_API_KEY)
     channels = db.get_all_channels()
     
     all_new_videos = []
     for ch in channels:
         try:
-            new_videos = checker.check_channel(ch['channel_id'], db)
-            for v in new_videos:
-                v['channel_name'] = ch['name']
-                all_new_videos.append(v)
+            channel_url = f"https://www.youtube.com/channel/{ch['channel_id']}/videos"
+            
+            ydl_opts = {
+                'quiet': True,
+                'skip_download': True,
+                'extract_flat': True,
+                'nocheckcertificate': True,
+                'socket_timeout': 30,
+                'playlistend': 10,
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(channel_url, download=False)
+                
+                if not info or 'entries' not in info:
+                    continue
+                
+                entries = list(info.get('entries', [])) or []
+                
+                for entry in entries:
+                    if not entry:
+                        continue
+                    
+                    video_id = entry.get('id', '')
+                    if not video_id or db.video_exists(video_id):
+                        continue
+                    
+                    title = entry.get('title', 'Unknown')
+                    upload_date = entry.get('upload_date', '')
+                    if upload_date and len(upload_date) == 8:
+                        published = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}T00:00:00Z"
+                    else:
+                        published = datetime.now().isoformat() + 'Z'
+                    
+                    is_live = 1 if entry.get('was_live', False) else 0
+                    
+                    db.add_video(
+                        video_id=video_id,
+                        channel_id=ch['channel_id'],
+                        title=title,
+                        published_at=published,
+                        is_live=is_live
+                    )
+                    
+                    all_new_videos.append({
+                        'video_id': video_id,
+                        'title': title,
+                        'published_at': published,
+                        'is_live': is_live,
+                        'channel_name': ch['name']
+                    })
+                    
         except Exception as e:
             logger.error(f"Error checking {ch['name']}: {e}")
     
     if all_new_videos:
         notifier = TelegramNotifier(TOKEN, str(ALLOWED_USER_ID))
         notifier.notify_batch(all_new_videos, db)
-        await update.message.reply_text(f"✅ Отправлено {len(all_new_videos)} уведомлений!")
+        await update.message.reply_text(f"✅ Найдено {len(all_new_videos)} новых видео!")
     else:
         await update.message.reply_text("ℹ️ Новых видео нет.")
 
