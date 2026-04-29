@@ -177,7 +177,9 @@ async def check_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     channels = db.get_all_channels()
     
-    all_new_videos = []
+    # First pass: collect new video IDs quickly (using extract_flat)
+    new_video_ids = []  # list of (video_id, channel_id, channel_name)
+    
     for ch in channels:
         try:
             channel_url = f"https://www.youtube.com/channel/{ch['channel_id']}/videos"
@@ -189,12 +191,6 @@ async def check_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'nocheckcertificate': True,
                 'socket_timeout': 30,
                 'playlistend': 10,
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['default'],
-                        'player_parameters': {'hl': 'ru', 'gl': 'RU'}
-                    }
-                },
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -218,33 +214,60 @@ async def check_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if duration and duration <= 60:
                         continue
                     
-                    title = entry.get('title', 'Unknown')
-                    upload_date = entry.get('upload_date', '')
+                    new_video_ids.append({
+                        'video_id': video_id,
+                        'channel_id': ch['channel_id'],
+                        'channel_name': ch['name']
+                    })
+                    
+        except Exception as e:
+            logger.error(f"Error checking {ch['name']}: {e}")
+    
+    if not new_video_ids:
+        await update.message.reply_text("ℹ️ Новых видео нет.")
+        return
+    
+    await update.message.reply_text(f"🔍 Найдено {len(new_video_ids)} новых видео, получаю русские названия...")
+    
+    # Second pass: fetch Russian titles for new videos individually
+    all_new_videos = []
+    for v in new_video_ids:
+        try:
+            ydl_opts = {
+                'quiet': True,
+                'skip_download': True,
+                'nocheckcertificate': True,
+                'socket_timeout': 15,
+                'extractor_args': {'youtube': {'lang': ['ru']}}
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(f"https://www.youtube.com/watch?v={v['video_id']}", download=False)
+                if info:
+                    title = info.get('title', 'Unknown')
+                    upload_date = info.get('upload_date', '')
                     if upload_date and len(upload_date) == 8:
                         published = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}T00:00:00Z"
                     else:
                         published = datetime.now().isoformat() + 'Z'
-                    
-                    is_live = 1 if entry.get('was_live', False) else 0
+                    is_live = 1 if info.get('live_status') == 'is_live' else 0
                     
                     db.add_video(
-                        video_id=video_id,
-                        channel_id=ch['channel_id'],
+                        video_id=v['video_id'],
+                        channel_id=v['channel_id'],
                         title=title,
                         published_at=published,
                         is_live=is_live
                     )
                     
                     all_new_videos.append({
-                        'video_id': video_id,
+                        'video_id': v['video_id'],
                         'title': title,
                         'published_at': published,
                         'is_live': is_live,
-                        'channel_name': ch['name']
+                        'channel_name': v['channel_name']
                     })
-                    
         except Exception as e:
-            logger.error(f"Error checking {ch['name']}: {e}")
+            logger.error(f"Error fetching title for {v['video_id']}: {e}")
     
     if all_new_videos:
         # Group by channel
@@ -287,7 +310,6 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     await update.message.reply_text(text, parse_mode=None)
-
 
 
 async def recent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -377,7 +399,6 @@ async def filters_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-    main()
 
 # Search cache: stores results for pagination
 # Search cache with indexed access
