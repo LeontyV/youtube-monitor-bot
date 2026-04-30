@@ -48,6 +48,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import yt_dlp
 from checker import YouTubeChecker
 from database import Database
+from notifier import TelegramNotifier
 
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 YOUTUBE_API_KEY = os.getenv('YOUTUBE_API_KEY')
@@ -193,6 +194,32 @@ async def check_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Отправлено {len(all_new_videos)} уведомлений!")
     else:
         await update.message.reply_text("ℹ️ Новых видео нет.")
+
+
+async def scheduled_check(app):
+    """Periodic check job — runs every 10 minutes."""
+    def _sync_check():
+        checker = YouTubeChecker(YOUTUBE_API_KEY)
+        channels = db.get_all_channels()
+
+        all_new_videos = []
+        for ch in channels:
+            try:
+                new_videos = checker.check_channel(ch['channel_id'], db)
+                for v in new_videos:
+                    v['channel_name'] = ch['name']
+                    all_new_videos.append(v)
+            except Exception as e:
+                logger.error(f"[scheduler] Error checking {ch['name']}: {e}")
+
+        if all_new_videos:
+            notifier = TelegramNotifier(TOKEN, str(ALLOWED_USER_ID))
+            notifier.notify_batch(all_new_videos, db)
+            logger.info(f"[scheduler] Sent {len(all_new_videos)} notifications")
+        else:
+            logger.info("[scheduler] No new videos")
+
+    await asyncio.to_thread(_sync_check)
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -445,6 +472,9 @@ def main():
     
     # Fallback
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    # Scheduler — check every 10 minutes
+    app.job_queue.run_repeating(scheduled_check, interval=600, first=10)
     
     logger.info("Bot started! Polling...")
     app.run_polling()
