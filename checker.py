@@ -21,7 +21,7 @@ class YouTubeChecker:
             'skip_download': True,
             'extract_flat': False,
             'nocheckcertificate': True,
-            'socket_timeout': 30,
+            'socket_timeout': 15,
         }
     
     def _extract_channel_id(self, channel_input: str) -> Optional[str]:
@@ -122,7 +122,7 @@ class YouTubeChecker:
             return None
 
     def get_recent_videos(self, channel_id: str, limit: int = 5) -> List[Dict]:
-        """Get recent videos from channel using yt-dlp."""
+        """Get recent videos from channel using yt-dlp (fast - only fetches first N)."""
         # Build URL
         if channel_id.startswith('@'):
             url = f"https://www.youtube.com/{channel_id}/videos"
@@ -133,8 +133,9 @@ class YouTubeChecker:
         
         try:
             opts = self.ydl_opts.copy()
-            opts['extract_flat'] = 'in_playlist'
+            opts['extract_flat'] = True
             opts['ignoreerrors'] = True
+            opts['playlist_items'] = f'1-{limit}'  # CRITICAL: only parse first N
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
             
@@ -142,7 +143,7 @@ class YouTubeChecker:
                 return []
             
             videos = []
-            for entry in list(info['entries'])[:limit]:
+            for entry in info['entries']:
                 if not entry:
                     continue
                 
@@ -171,30 +172,55 @@ class YouTubeChecker:
             return []
 
     def get_live_streams(self, channel_id: str) -> List[Dict]:
-        """Get currently live streams from channel."""
-        # Try to get live stream directly
+        """Get currently live streams from channel (fast - max 1 item)."""
         if channel_id.startswith('@'):
-            url = f"https://www.youtube.com/{channel_id}"
+            url = f"https://www.youtube.com/{channel_id}/live"
         elif channel_id.startswith('UC'):
-            url = f"https://www.youtube.com/channel/{channel_id}"
+            url = f"https://www.youtube.com/channel/{channel_id}/live"
         else:
-            url = f"https://www.youtube.com/{channel_id}"
+            url = f"https://www.youtube.com/{channel_id}/live"
         
         try:
             opts = self.ydl_opts.copy()
-            opts['extract_flat'] = 'in_playlist'
+            opts['extract_flat'] = True
             opts['ignoreerrors'] = True
+            opts['playlist_items'] = '1'  # Only check first
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
             
             if not info:
                 return []
             
-            # Check if channel/video is currently live
-            entries = info.get('entries', [info]) if 'entries' in info else [info]
+            # Handle redirect URL case (channel not live)
+            if info.get('_type') == 'url' and info.get('id'):
+                # It's a video redirect - check if it's actually live
+                video_id = info.get('id')
+                # Try to get info for it
+                video_opts = self.ydl_opts.copy()
+                video_opts['extract_flat'] = True
+                video_opts['ignoreerrors'] = True
+                with yt_dlp.YoutubeDL(video_opts) as ydl2:
+                    video_info = ydl2.extract_info(
+                        f"https://www.youtube.com/watch?v={video_id}",
+                        download=False,
+                    )
+                if video_info and video_info.get('live_status') == 'is_live':
+                    return [{
+                        'video_id': video_id,
+                        'title': video_info.get('title', 'Unknown'),
+                        'description': video_info.get('description', '')[:200],
+                        'published_at': video_info.get('upload_date'),
+                        'thumbnail': video_info.get('thumbnail'),
+                        'is_live': True,
+                        'url': f"https://www.youtube.com/watch?v={video_id}",
+                    }]
+                return []
+            
+            if 'entries' not in info:
+                return []
             
             live_videos = []
-            for entry in entries:
+            for entry in info.get('entries', []):
                 if not entry:
                     continue
                 
@@ -241,47 +267,42 @@ class YouTubeChecker:
     def check_channel(self, channel_id: str, db) -> List[Dict]:
         """Check channel for new videos and live streams."""
         new_videos = []
+        seen_ids = set()
         
-        # Check for live streams first
-        live_streams = self.get_live_streams(channel_id)
-        for video in live_streams:
-            if not db.video_exists(video['video_id']):
-                # Fetch date if missing
-                pub_at = video.get('published_at')
-                if not pub_at:
-                    pub_at = self.get_video_upload_date(video['video_id'])
-                db.add_video(
-                    video_id=video['video_id'],
-                    channel_id=channel_id,
-                    title=video['title'],
-                    published_at=pub_at,
-                    is_live=1
-                )
-                video['published_at'] = pub_at
-                new_videos.append(video)
-                logger.info(f"LIVE stream found: {video['title']}")
+        # Check live streams first (fast - max 1 item)
+        try:
+            live_streams = self.get_live_streams(channel_id)
+            for video in live_streams:
+                if not db.video_exists(video['video_id']):
+                    db.add_video(
+                        video_id=video['video_id'],
+                        channel_id=channel_id,
+                        title=video['title'],
+                        published_at=video.get('published_at'),
+                        is_live=1
+                    )
+                    video['published_at'] = video.get('published_at')
+                    new_videos.append(video)
+                    seen_ids.add(video['video_id'])
+                    logger.info(f"LIVE stream found: {video['title']}")
+        except Exception as e:
+            logger.error(f"[live_check] {e}")
         
-        # Get recent videos (last 5 to catch any missed)
+        # Get recent videos
         videos = self.get_recent_videos(channel_id, limit=5)
         
         for video in videos:
-            # Skip if already marked as live
-            if video.get('is_live'):
+            if video['video_id'] in seen_ids:
                 continue
-            # Check if already in database
             if not db.video_exists(video['video_id']):
-                # Fetch date if missing
-                pub_at = video.get('published_at')
-                if not pub_at:
-                    pub_at = self.get_video_upload_date(video['video_id'])
                 db.add_video(
                     video_id=video['video_id'],
                     channel_id=channel_id,
                     title=video['title'],
-                    published_at=pub_at,
+                    published_at=video.get('published_at'),
                     is_live=0
                 )
-                video['published_at'] = pub_at
+                video['published_at'] = video.get('published_at')
                 new_videos.append(video)
                 logger.info(f"New video found: {video['title']}")
         

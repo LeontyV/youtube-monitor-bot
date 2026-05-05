@@ -63,6 +63,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Semaphore: max 3 parallel yt-dlp checks (WireGuard / CPU limit)
+CHECK_SEMAPHORE = asyncio.Semaphore(3)
+
 # Initialize database
 db = Database(os.getenv('DATABASE_PATH', 'data/monitor.db'))
 
@@ -184,15 +187,19 @@ async def check_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     checker = YouTubeChecker(YOUTUBE_API_KEY)
     channels = db.get_all_channels()
     
-    all_new_videos = []
-    for ch in channels:
-        try:
-            new_videos = checker.check_channel(ch['channel_id'], db)
-            for v in new_videos:
-                v['channel_name'] = ch['name']
-                all_new_videos.append(v)
-        except Exception as e:
-            logger.error(f"Error checking {ch['name']}: {e}")
+    async def _check_one(ch):
+        async with CHECK_SEMAPHORE:
+            try:
+                new_videos = await asyncio.to_thread(checker.check_channel, ch['channel_id'], db)
+                for v in new_videos:
+                    v['channel_name'] = ch['name']
+                return new_videos
+            except Exception as e:
+                logger.error(f"Error checking {ch['name']}: {e}")
+                return []
+    
+    results = await asyncio.gather(*[_check_one(ch) for ch in channels])
+    all_new_videos = [v for sublist in results for v in sublist]
     
     if all_new_videos:
         # Use global notifier
@@ -204,28 +211,29 @@ async def check_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def scheduled_check(app):
     """Periodic check job — runs every 10 minutes."""
-    def _sync_check():
-        checker = YouTubeChecker(YOUTUBE_API_KEY)
-        channels = db.get_all_channels()
+    checker = YouTubeChecker(YOUTUBE_API_KEY)
+    channels = db.get_all_channels()
 
-        all_new_videos = []
-        for ch in channels:
+    async def _check_one(ch):
+        async with CHECK_SEMAPHORE:
             try:
-                new_videos = checker.check_channel(ch['channel_id'], db)
+                new_videos = await asyncio.to_thread(checker.check_channel, ch['channel_id'], db)
                 for v in new_videos:
                     v['channel_name'] = ch['name']
-                    all_new_videos.append(v)
+                return new_videos
             except Exception as e:
                 logger.error(f"[scheduler] Error checking {ch['name']}: {e}")
+                return []
 
-        if all_new_videos:
-            # Use global notifier
-            notifier.notify_batch(all_new_videos, db)
-            logger.info(f"[scheduler] Sent {len(all_new_videos)} notifications")
-        else:
-            logger.info("[scheduler] No new videos")
+    results = await asyncio.gather(*[_check_one(ch) for ch in channels])
+    all_new_videos = [v for sublist in results for v in sublist]
 
-    await asyncio.to_thread(_sync_check)
+    if all_new_videos:
+        # Use global notifier
+        notifier.notify_batch(all_new_videos, db)
+        logger.info(f"[scheduler] Sent {len(all_new_videos)} notifications")
+    else:
+        logger.info("[scheduler] No new videos")
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
