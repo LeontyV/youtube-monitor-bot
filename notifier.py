@@ -5,6 +5,7 @@ Telegram notifier for YouTube Monitor
 import os
 import httpx
 import logging
+import time
 from typing import List, Dict
 
 logger = logging.getLogger(__name__)
@@ -42,9 +43,32 @@ class TelegramNotifier:
             logger.error(f"Error sending notification: {e}")
             return False
     
+    def _send_photo(self, photo_url: str, caption: str, parse_mode: str = 'Markdown') -> bool:
+        """Send photo with caption to Telegram."""
+        url = f"{TELEGRAM_API}{self.bot_token}/sendPhoto"
+        try:
+            response = self.client.post(
+                url,
+                json={
+                    'chat_id': self.chat_id,
+                    'photo': photo_url,
+                    'caption': caption,
+                    'parse_mode': parse_mode
+                }
+            )
+            if response.status_code == 200:
+                return True
+            else:
+                logger.warning(f"sendPhoto failed: {response.text}, falling back to text")
+                return False
+        except Exception as e:
+            logger.warning(f"sendPhoto error: {e}, falling back to text")
+            return False
+    
     def notify_new_video(self, video: Dict, channel_name: str):
         """Notify about new video."""
         video_url = f"https://www.youtube.com/watch?v={video['video_id']}"
+        thumbnail = video.get('thumbnail')
         
         emoji = "🔴" if video.get('is_live') else "🆕"
         
@@ -55,12 +79,15 @@ class TelegramNotifier:
             f"▶️ {video_url}"
         )
         
+        if thumbnail and self._send_photo(thumbnail, text):
+            return
         self._send_message(text)
     
     def notify_live(self, video: Dict, channel_name: str):
         """Notify about live stream."""
         video_url = f"https://www.youtube.com/watch?v={video['video_id']}"
         viewers = video.get('live_viewers')
+        thumbnail = video.get('thumbnail')
         viewers_text = f"👁 {viewers} зрителей" if viewers else ""
         
         text = (
@@ -71,6 +98,8 @@ class TelegramNotifier:
             f"▶️ {video_url}"
         )
         
+        if thumbnail and self._send_photo(thumbnail, text):
+            return
         self._send_message(text)
     
     def notify_batch(self, videos: List[Dict], db):
