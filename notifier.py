@@ -89,11 +89,14 @@ class TelegramNotifier:
                 db.mark_notified(video['video_id'])
                 
                 # Small delay to avoid rate limits
-                import time
                 time.sleep(0.5)
                 
             except Exception as e:
                 logger.error(f"Error notifying video {video['video_id']}: {e}")
+    
+    def close(self):
+        """Close httpx client."""
+        self.client.close()
     
     def send_status(self, channels_count: int, recent_count: int):
         """Send status update."""

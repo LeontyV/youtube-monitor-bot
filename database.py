@@ -299,3 +299,7 @@ class Database:
             ]
         finally:
             conn.close()
+
+    def close(self):
+        """Close any open resources."""
+        pass

@@ -6,6 +6,8 @@ import os
 import sys
 import asyncio
 import logging
+import time
+import signal
 from datetime import datetime
 
 # Load .env
@@ -19,6 +21,7 @@ YDL_OPTS = {
     'extract_flat': True,
     'nocheckcertificate': True,
     'socket_timeout': 30,
+    'force_ipv4': True,
 }
 
 def ydl_search(query: str, limit: int = 50):
@@ -52,7 +55,7 @@ from notifier import TelegramNotifier
 
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 YOUTUBE_API_KEY = os.getenv('YOUTUBE_API_KEY')
-ALLOWED_USER_ID = 68650276  # Leonty
+ALLOWED_USER_ID = int(os.getenv('ALLOWED_USER_ID', '68650276'))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,6 +65,9 @@ logger = logging.getLogger(__name__)
 
 # Initialize database
 db = Database(os.getenv('DATABASE_PATH', 'data/monitor.db'))
+
+# Initialize notifier (single instance)
+notifier = TelegramNotifier(TOKEN, str(ALLOWED_USER_ID))
 
 
 async def auth_check(update: Update) -> bool:
@@ -189,7 +195,7 @@ async def check_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error checking {ch['name']}: {e}")
     
     if all_new_videos:
-        notifier = TelegramNotifier(TOKEN, str(ALLOWED_USER_ID))
+        # Use global notifier
         notifier.notify_batch(all_new_videos, db)
         await update.message.reply_text(f"✅ Отправлено {len(all_new_videos)} уведомлений!")
     else:
@@ -213,7 +219,7 @@ async def scheduled_check(app):
                 logger.error(f"[scheduler] Error checking {ch['name']}: {e}")
 
         if all_new_videos:
-            notifier = TelegramNotifier(TOKEN, str(ALLOWED_USER_ID))
+            # Use global notifier
             notifier.notify_batch(all_new_videos, db)
             logger.info(f"[scheduler] Sent {len(all_new_videos)} notifications")
         else:
@@ -263,7 +269,7 @@ async def recent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎬 Последние видео:", parse_mode=None)
     await asyncio.sleep(0.2)
     
-    for ch_name, ch_videos in list(channels.items())[:3]:
+    for ch_name, ch_videos in channels.items():
         text = f"📺 {ch_name}\n"
         for v in ch_videos[:5]:
             video_url = f"https://www.youtube.com/watch?v={v['video_id']}"
@@ -295,7 +301,7 @@ async def filters_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ Доступ запрещён.")
         return
     
-    db = Database(os.path.join(os.path.dirname(__file__), 'data/monitor.db'))
+    # Use global db
     
     if not context.args:
         filters = db.get_filters()
@@ -325,15 +331,17 @@ async def filters_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ Фильтр добавлен: '{keywords}' ({days} дн.)")
 
 
-
-
-
-    main()
-
 # Search cache: stores results for pagination
 # Search cache with indexed access
 search_cache = {}  # cache_id -> {videos, query, days, region}
 search_index = 0  # Counter for generating unique IDs
+
+def _add_search_cache(cache_id: int, data: dict):
+    data["ts"] = time.time()
+    search_cache[cache_id] = data
+    if len(search_cache) > 50:
+        oldest = min(search_cache.keys(), key=lambda k: search_cache[k].get("ts", 0))
+        del search_cache[oldest]
 
 def get_cache_key(query: str, days: int, region: str) -> str:
     return f"{query}|||{days}|||{region or ''}"
@@ -477,6 +485,18 @@ def main():
     app.job_queue.run_repeating(scheduled_check, interval=600, first=10)
     
     logger.info("Bot started! Polling...")
+    def shutdown_signal(sig, frame):
+        logger.info("Shutting down gracefully...")
+        try:
+            notifier.close()
+        except Exception:
+            pass
+        db.close()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, shutdown_signal)
+    signal.signal(signal.SIGINT, shutdown_signal)
+
     app.run_polling()
 
 
